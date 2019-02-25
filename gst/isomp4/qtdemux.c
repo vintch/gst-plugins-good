@@ -97,6 +97,14 @@
 
 GST_DEBUG_CATEGORY (qtdemux_debug);
 
+enum
+{
+  PROP_0,
+  PROP_ACCURATE_STOP
+};
+
+#define DEFAULT_ACCURATE_STOP FALSE
+
 /*typedef struct _QtNode QtNode; */
 typedef struct _QtDemuxSegment QtDemuxSegment;
 typedef struct _QtDemuxSample QtDemuxSample;
@@ -423,6 +431,12 @@ enum QtDemuxState
   QTDEMUX_STATE_BUFFER_MDAT     /* Buffering the mdat atom */
 };
 
+/* property functions */
+static void gst_qtdemux_set_property (GObject * object,
+    guint prop_id, const GValue * value, GParamSpec * pspec);
+static void gst_qtdemux_get_property (GObject * object,
+    guint prop_id, GValue * value, GParamSpec * pspec);
+
 static GNode *qtdemux_tree_get_child_by_type (GNode * node, guint32 fourcc);
 static GNode *qtdemux_tree_get_child_by_type_full (GNode * node,
     guint32 fourcc, GstByteReader * parser);
@@ -549,6 +563,8 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
   parent_class = g_type_class_peek_parent (klass);
 
   gobject_class->dispose = gst_qtdemux_dispose;
+  gobject_class->set_property = gst_qtdemux_set_property;
+  gobject_class->get_property = gst_qtdemux_get_property;
 
   gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_qtdemux_change_state);
 #if 0
@@ -568,8 +584,13 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
       gst_static_pad_template_get (&gst_qtdemux_subsrc_template));
   gst_element_class_set_static_metadata (gstelement_class, "QuickTime demuxer",
       "Codec/Demuxer",
-      "Demultiplex a QuickTime file into audio and video streams",
+      "Demultiplex a QuickTime file into audio and video streams (+ACCURATE_STOP)",
       "David Schleef <ds@schleef.org>, Wim Taymans <wim@fluendo.com>");
+
+  g_object_class_install_property (gobject_class, PROP_ACCURATE_STOP,
+      g_param_spec_boolean ("accurate-stop", "Accurate segment stop",
+          "Allow accurate segment stop including stop on non-key frames",
+          DEFAULT_ACCURATE_STOP, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   GST_DEBUG_CATEGORY_INIT (qtdemux_debug, "qtdemux", 0, "qtdemux plugin");
 
@@ -615,6 +636,7 @@ gst_qtdemux_init (GstQTDemux * qtdemux)
   qtdemux->protection_system_ids = NULL;
   g_queue_init (&qtdemux->protection_event_queue);
   gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
+  qtdemux->accurate_stop = DEFAULT_ACCURATE_STOP;
   qtdemux->flowcombiner = gst_flow_combiner_new ();
 
   GST_OBJECT_FLAG_SET (qtdemux, GST_ELEMENT_FLAG_INDEXABLE);
@@ -638,6 +660,42 @@ gst_qtdemux_dispose (GObject * object)
   qtdemux->cenc_aux_info_sizes = NULL;
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
+gst_qtdemux_get_property (GObject * object,
+    guint prop_id, GValue * value, GParamSpec * pspec)
+{
+  GstQTDemux *qtdemux = GST_QTDEMUX_CAST (object);
+
+  GST_OBJECT_LOCK (qtdemux);
+  switch (prop_id) {
+    case PROP_ACCURATE_STOP:
+      g_value_set_boolean (value, qtdemux->accurate_stop);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+  GST_OBJECT_UNLOCK (qtdemux);
+}
+
+static void
+gst_qtdemux_set_property (GObject * object,
+    guint prop_id, const GValue * value, GParamSpec * pspec)
+{
+  GstQTDemux *qtdemux = GST_QTDEMUX_CAST (object);
+
+  GST_OBJECT_LOCK (qtdemux);
+  switch (prop_id) {
+    case PROP_ACCURATE_STOP:
+      qtdemux->accurate_stop = g_value_get_boolean (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+  GST_OBJECT_UNLOCK (qtdemux);
 }
 
 static void
@@ -5227,7 +5285,7 @@ gst_qtdemux_loop_state_movie (GstQTDemux * qtdemux)
           && ((qtdemux->segment.rate >= 0 && qtdemux->segment.stop <= min_time)
               || (qtdemux->segment.rate < 0
                   && qtdemux->segment.start > min_time))
-          && qtdemux->streams[index]->on_keyframe)) {
+          && (qtdemux->accurate_stop || qtdemux->streams[index]->on_keyframe) )) {
     GST_DEBUG_OBJECT (qtdemux, "we reached the end of our segment.");
     qtdemux->streams[index]->time_position = GST_CLOCK_TIME_NONE;
     goto eos_stream;

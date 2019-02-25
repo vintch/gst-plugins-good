@@ -126,6 +126,7 @@ struct _GstQTDemux {
   gint64 seek_offset;
   gint64 push_seek_start;
   gint64 push_seek_stop;
+  gboolean accurate_stop;
 
 #if 0
   /* gst index support */
