@@ -44,6 +44,12 @@ GST_DEBUG_CATEGORY_EXTERN (qtdemux_debug);
 
 #define GST_QTDEMUX_CAST(obj) ((GstQTDemux *)(obj))
 
+typedef enum {
+  QTDEMUX_ACCURATE_STOP_DISABLED,
+  QTDEMUX_ACCURATE_STOP_ON_ANY_FRAME,
+  QTDEMUX_ACCURATE_STOP_PRECISE_TIME
+} QTDemuxAccurateStopMode;
+
 /* qtdemux produces these for atoms it cannot parse */
 #define GST_QT_DEMUX_PRIVATE_TAG "private-qt-tag"
 #define GST_QT_DEMUX_CLASSIFICATION_TAG "classification"
@@ -126,7 +132,7 @@ struct _GstQTDemux {
   gint64 seek_offset;
   gint64 push_seek_start;
   gint64 push_seek_stop;
-  gboolean accurate_stop;
+  QTDemuxAccurateStopMode accurate_stop;
 
 #if 0
   /* gst index support */

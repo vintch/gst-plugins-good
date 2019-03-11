@@ -103,7 +103,7 @@ enum
   PROP_ACCURATE_STOP
 };
 
-#define DEFAULT_ACCURATE_STOP FALSE
+#define DEFAULT_ACCURATE_STOP QTDEMUX_ACCURATE_STOP_DISABLED
 
 /*typedef struct _QtNode QtNode; */
 typedef struct _QtDemuxSegment QtDemuxSegment;
@@ -431,6 +431,27 @@ enum QtDemuxState
   QTDEMUX_STATE_BUFFER_MDAT     /* Buffering the mdat atom */
 };
 
+#define QTDEMUX_TYPE_ACCURATE_STOP_MODE (qtdemux_accurate_stop_mode_get_type())
+
+static const GEnumValue accurate_stop_modes[] = {
+  {QTDEMUX_ACCURATE_STOP_DISABLED, "Stop on keyframes only", "disabled"},
+  {QTDEMUX_ACCURATE_STOP_ON_ANY_FRAME, "Stop on any frame (time still not precise)", "any-frame"},
+  {QTDEMUX_ACCURATE_STOP_PRECISE_TIME, "Stop at precise time", "precise-time"},
+  {0, NULL, NULL}
+};
+
+static GType
+qtdemux_accurate_stop_mode_get_type(void)
+{
+  static GType accurate_stop_mode_type = 0;
+
+  if (!accurate_stop_mode_type) {
+    accurate_stop_mode_type = g_enum_register_static ("QTDemuxAccurateStopMode",
+        accurate_stop_modes);
+  }
+  return accurate_stop_mode_type;
+}
+
 /* property functions */
 static void gst_qtdemux_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec);
@@ -588,9 +609,10 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
       "David Schleef <ds@schleef.org>, Wim Taymans <wim@fluendo.com>");
 
   g_object_class_install_property (gobject_class, PROP_ACCURATE_STOP,
-      g_param_spec_boolean ("accurate-stop", "Accurate segment stop",
+      g_param_spec_enum("accurate-stop", "Accurate segment stop",
           "Allow accurate segment stop including stop on non-key frames",
-          DEFAULT_ACCURATE_STOP, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          QTDEMUX_TYPE_ACCURATE_STOP_MODE, DEFAULT_ACCURATE_STOP,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   GST_DEBUG_CATEGORY_INIT (qtdemux_debug, "qtdemux", 0, "qtdemux plugin");
 
@@ -671,7 +693,7 @@ gst_qtdemux_get_property (GObject * object,
   GST_OBJECT_LOCK (qtdemux);
   switch (prop_id) {
     case PROP_ACCURATE_STOP:
-      g_value_set_boolean (value, qtdemux->accurate_stop);
+      g_value_set_enum(value, qtdemux->accurate_stop);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -689,7 +711,7 @@ gst_qtdemux_set_property (GObject * object,
   GST_OBJECT_LOCK (qtdemux);
   switch (prop_id) {
     case PROP_ACCURATE_STOP:
-      qtdemux->accurate_stop = g_value_get_boolean (value);
+      qtdemux->accurate_stop = g_value_get_enum (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -5285,7 +5307,9 @@ gst_qtdemux_loop_state_movie (GstQTDemux * qtdemux)
           && ((qtdemux->segment.rate >= 0 && qtdemux->segment.stop <= min_time)
               || (qtdemux->segment.rate < 0
                   && qtdemux->segment.start > min_time))
-          && (qtdemux->accurate_stop || qtdemux->streams[index]->on_keyframe) )) {
+          && (qtdemux->accurate_stop != QTDEMUX_ACCURATE_STOP_DISABLED 
+              || qtdemux->streams[index]->on_keyframe) )) 
+  {
     GST_DEBUG_OBJECT (qtdemux, "we reached the end of our segment.");
     qtdemux->streams[index]->time_position = GST_CLOCK_TIME_NONE;
     goto eos_stream;
@@ -5437,6 +5461,17 @@ gst_qtdemux_loop_state_movie (GstQTDemux * qtdemux)
    * we have no more data for the pad to push */
   if (ret == GST_FLOW_EOS)
     ret = GST_FLOW_OK;
+
+  /* check for segment end - precise stop time */
+  if (G_UNLIKELY (qtdemux->accurate_stop == QTDEMUX_ACCURATE_STOP_PRECISE_TIME
+          && stream->segment.stop != -1
+          && ((stream->segment.rate >= 0 && stream->segment.stop <= pts)
+              || (stream->segment.rate < 0 && stream->segment.start > pts)) ))
+  {
+    GST_DEBUG_OBJECT (qtdemux, "Precise stop. We reached the end of our segment.");
+    stream->time_position = GST_CLOCK_TIME_NONE;
+    goto beach;
+  }
 
   stream->offset_in_sample += size;
   if (stream->offset_in_sample >= sample_size) {
@@ -6317,7 +6352,8 @@ gst_qtdemux_process_adapter (GstQTDemux * demux, gboolean force)
 
           /* check for segment end */
           if (G_UNLIKELY (demux->segment.stop != -1
-                  && demux->segment.stop <= pts && stream->on_keyframe)) {
+                  && demux->segment.stop <= pts 
+                  && (demux->accurate_stop != QTDEMUX_ACCURATE_STOP_DISABLED || stream->on_keyframe) )) {
             GST_DEBUG_OBJECT (demux, "we reached the end of our segment.");
             stream->time_position = GST_CLOCK_TIME_NONE;        /* this means EOS */
 
