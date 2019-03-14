@@ -50,6 +50,11 @@ typedef enum {
   QTDEMUX_ACCURATE_STOP_PRECISE_TIME
 } QTDemuxAccurateStopMode;
 
+typedef enum {
+  QTDEMUX_SEEK_BASE_MODE_DEFAULT,
+  QTDEMUX_SEEK_BASE_MODE_ACCUMULATED
+} QTDemuxSeekBaseMode;
+
 /* qtdemux produces these for atoms it cannot parse */
 #define GST_QT_DEMUX_PRIVATE_TAG "private-qt-tag"
 #define GST_QT_DEMUX_CLASSIFICATION_TAG "classification"
@@ -133,6 +138,7 @@ struct _GstQTDemux {
   gint64 push_seek_start;
   gint64 push_seek_stop;
   QTDemuxAccurateStopMode accurate_stop;
+  QTDemuxSeekBaseMode seek_base_mode;
 
 #if 0
   /* gst index support */

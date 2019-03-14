@@ -100,10 +100,12 @@ GST_DEBUG_CATEGORY (qtdemux_debug);
 enum
 {
   PROP_0,
-  PROP_ACCURATE_STOP
+  PROP_ACCURATE_STOP,
+  PROP_SEEK_BASE_MODE
 };
 
 #define DEFAULT_ACCURATE_STOP QTDEMUX_ACCURATE_STOP_DISABLED
+#define DEFAULT_SEEK_BASE_MODE QTDEMUX_SEEK_BASE_MODE_DEFAULT
 
 /*typedef struct _QtNode QtNode; */
 typedef struct _QtDemuxSegment QtDemuxSegment;
@@ -452,6 +454,26 @@ qtdemux_accurate_stop_mode_get_type(void)
   return accurate_stop_mode_type;
 }
 
+#define QTDEMUX_TYPE_SEEK_BASE_MODE (qtdemux_seek_base_mode_get_type())
+
+static const GEnumValue seek_base_modes[] = {
+  {QTDEMUX_SEEK_BASE_MODE_DEFAULT, "Default segment base time handling", "default"},
+  {QTDEMUX_SEEK_BASE_MODE_ACCUMULATED, "Use accumulated base", "accumulated"},
+  {0, NULL, NULL}
+};
+
+static GType
+qtdemux_seek_base_mode_get_type(void)
+{
+  static GType seek_base_mode_type = 0;
+
+  if (!seek_base_mode_type) {
+    seek_base_mode_type = g_enum_register_static("QTDemuxSeekBaseMode",
+      seek_base_modes);
+  }
+  return seek_base_mode_type;
+}
+
 /* property functions */
 static void gst_qtdemux_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec);
@@ -614,6 +636,12 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
           QTDEMUX_TYPE_ACCURATE_STOP_MODE, DEFAULT_ACCURATE_STOP,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_SEEK_BASE_MODE,
+      g_param_spec_enum("seek-base-mode", "Seek segment base handling",
+          "Handling mode of the segment's \"base\" time for seek operations",
+          QTDEMUX_TYPE_SEEK_BASE_MODE, DEFAULT_SEEK_BASE_MODE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   GST_DEBUG_CATEGORY_INIT (qtdemux_debug, "qtdemux", 0, "qtdemux plugin");
 
 }
@@ -659,6 +687,7 @@ gst_qtdemux_init (GstQTDemux * qtdemux)
   g_queue_init (&qtdemux->protection_event_queue);
   gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
   qtdemux->accurate_stop = DEFAULT_ACCURATE_STOP;
+  qtdemux->seek_base_mode = DEFAULT_SEEK_BASE_MODE;
   qtdemux->flowcombiner = gst_flow_combiner_new ();
 
   GST_OBJECT_FLAG_SET (qtdemux, GST_ELEMENT_FLAG_INDEXABLE);
@@ -695,6 +724,9 @@ gst_qtdemux_get_property (GObject * object,
     case PROP_ACCURATE_STOP:
       g_value_set_enum(value, qtdemux->accurate_stop);
       break;
+    case PROP_SEEK_BASE_MODE:
+      g_value_set_enum(value, qtdemux->seek_base_mode);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -712,6 +744,9 @@ gst_qtdemux_set_property (GObject * object,
   switch (prop_id) {
     case PROP_ACCURATE_STOP:
       qtdemux->accurate_stop = g_value_get_enum (value);
+      break;
+    case PROP_SEEK_BASE_MODE:
+      qtdemux->seek_base_mode = g_value_get_enum (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1618,6 +1653,8 @@ gst_qtdemux_do_seek (GstQTDemux * qtdemux, GstPad * pad, GstEvent * event)
   GstSegment seeksegment;
   guint32 seqnum = 0;
   GstEvent *flush_event;
+  guint64 accumulated_base, max_accumulated_base;
+  gint i;
 
   if (event) {
     GST_DEBUG_OBJECT (qtdemux, "doing seek with event");
@@ -1664,6 +1701,24 @@ gst_qtdemux_do_seek (GstQTDemux * qtdemux, GstPad * pad, GstEvent * event)
   if (event) {
     /* configure the segment with the seek variables */
     GST_DEBUG_OBJECT (qtdemux, "configuring seek");
+
+    if (qtdemux->seek_base_mode == QTDEMUX_SEEK_BASE_MODE_ACCUMULATED)
+    {
+      max_accumulated_base = seeksegment.position;
+      for (i = 0; i < qtdemux->n_streams; i++) {
+        accumulated_base = qtdemux->streams[i]->accumulated_base;
+        if (accumulated_base > max_accumulated_base)
+          max_accumulated_base = accumulated_base;
+      }
+
+      GST_DEBUG_OBJECT(qtdemux, \
+        "Segment position adjusted using accumulated base. Position before: %" G_GUINT64_FORMAT \
+        ", after: %" G_GUINT64_FORMAT,\
+        seeksegment.position, max_accumulated_base);
+
+      seeksegment.position = max_accumulated_base;
+    }
+
     gst_segment_do_seek (&seeksegment, rate, format, flags,
         cur_type, cur, stop_type, stop, &update);
   }
